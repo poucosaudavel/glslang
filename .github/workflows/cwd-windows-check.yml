@@ -1,0 +1,54 @@
+# Temporary check (not for upstream): run the standalone glslang from a folder whose name is outside the
+# runner's ANSI code page (1252), at upstream main and with the fix.
+name: Working directory outside the code page
+on:
+  push:
+    branches: [cwd-windows-check]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: upstream main
+            ref: 6334e1549a49989e04b5329a6a39a328247fd6ed
+          - name: with the fix
+            ref: 2271338200f70b987fed9d42ca4966a534448768
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - name: Build glslang (standalone)
+        run: |
+          cmake -S . -B build -DENABLE_OPT=OFF -DGLSLANG_TESTS=OFF
+          cmake --build build --config Release --target glslang-standalone --parallel
+      - name: Compile a shader from a CJK-named folder, then from an ASCII one with -g
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path build/StandAlone/Release/glslang.exe).Path
+          "ANSI code page: " + [System.Text.Encoding]::Default.CodePage
+          $shader = "#version 450`nlayout(location = 0) out vec4 color;`nvoid main() { color = vec4(1.0); }`n"
+          $failed = $false
+          foreach ($dir in @("$env:RUNNER_TEMP\测试 folder", "$env:RUNNER_TEMP\ascii folder")) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir "test.frag") -Value $shader -Encoding ascii -NoNewline
+            Push-Location -LiteralPath $dir
+            foreach ($extra in @(@(), @("-g"))) {
+              Remove-Item -ErrorAction SilentlyContinue out.spv
+              & $exe -V @extra -o out.spv test.frag
+              $code = $LASTEXITCODE
+              $size = if (Test-Path out.spv) { (Get-Item out.spv).Length } else { 0 }
+              $hasCwd = $false
+              if ($size -gt 0) { $hasCwd = [System.Text.Encoding]::Default.GetString([IO.File]::ReadAllBytes("$dir\out.spv")).Contains("ascii folder") }
+              "{0} | args: -V {1} | exit 0x{2:X8} | out.spv {3} bytes | ASCII cwd in debug info: {4}" -f $dir, ($extra -join ' '), $code, $size, $hasCwd
+              if ($code -ne 0 -or $size -eq 0) { $failed = $true }
+            }
+            Pop-Location
+          }
+          if ($failed) { throw "glslang failed in at least one folder" }
