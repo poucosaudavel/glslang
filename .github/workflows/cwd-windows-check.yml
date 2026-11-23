@@ -28,25 +28,26 @@ jobs:
         run: |
           cmake -S . -B build -DENABLE_OPT=OFF -DGLSLANG_TESTS=OFF
           cmake --build build --config Release --target glslang-standalone --parallel
-      - name: Compile a shader from a CJK-named folder, then from an ASCII one with -g
+      - name: Compile a shader from an ASCII, an accented-Latin and a CJK-named folder
         shell: pwsh
         run: |
           $exe = (Resolve-Path build/StandAlone/Release/glslang.exe).Path
-          "ANSI code page: " + [System.Text.Encoding]::Default.CodePage
+          "ANSI code page: " + (Get-ItemPropertyValue "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage" ACP)
           $shader = "#version 450`nlayout(location = 0) out vec4 color;`nvoid main() { color = vec4(1.0); }`n"
           $failed = $false
-          foreach ($dir in @("$env:RUNNER_TEMP\测试 folder", "$env:RUNNER_TEMP\ascii folder")) {
+          foreach ($dir in @("$env:RUNNER_TEMP\ascii folder", "$env:RUNNER_TEMP\Pasta João", "$env:RUNNER_TEMP\测试 folder")) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
             Set-Content -LiteralPath (Join-Path $dir "test.frag") -Value $shader -Encoding ascii -NoNewline
             Push-Location -LiteralPath $dir
-            foreach ($extra in @(@(), @("-g"))) {
+            foreach ($extra in @(@(), @("-g"), @("-gV"))) {
               Remove-Item -ErrorAction SilentlyContinue out.spv
               & $exe -V @extra -o out.spv test.frag
               $code = $LASTEXITCODE
               $size = if (Test-Path out.spv) { (Get-Item out.spv).Length } else { 0 }
+              $hash = if ($size -gt 0) { (Get-FileHash -Algorithm SHA256 out.spv).Hash.Substring(0, 16) } else { "-" }
               $hasCwd = $false
-              if ($size -gt 0) { $hasCwd = [System.Text.Encoding]::Default.GetString([IO.File]::ReadAllBytes("$dir\out.spv")).Contains("ascii folder") }
-              "{0} | args: -V {1} | exit 0x{2:X8} | out.spv {3} bytes | ASCII cwd in debug info: {4}" -f $dir, ($extra -join ' '), $code, $size, $hasCwd
+              if ($size -gt 0) { $hasCwd = [System.Text.Encoding]::Latin1.GetString([IO.File]::ReadAllBytes("$dir\out.spv")).Contains("_temp") }
+              "RESULT {0} | -V {1} | exit 0x{2:X8} | {3} bytes | sha {4} | cwd recorded: {5}" -f (Split-Path -Leaf $dir), ($extra -join ' '), $code, $size, $hash, $hasCwd
               if ($code -ne 0 -or $size -eq 0) { $failed = $true }
             }
             Pop-Location
